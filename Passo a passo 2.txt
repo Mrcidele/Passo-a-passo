@@ -1,0 +1,408 @@
+Abaixo está um guia completo, com trechos de código prontos, para criar do zero uma Web API em .NET Core que:
+
+Se conecta a um banco MySQL via EF Core
+
+Possui cadastro/login de usuários com emissão de JWT
+
+Possui CRUD de eventos atrelados a usuários
+
+Protege rotas usando autenticação JWT
+
+1. Criar o projeto e instalar pacotes
+bash
+Copiar código
+dotnet new webapi -n EventosApi
+cd EventosApi
+Abra o EventosApi.csproj e acrescente (ou rode via CLI):
+
+bash
+Copiar código
+dotnet add package Microsoft.EntityFrameworkCore
+dotnet add package Pomelo.EntityFrameworkCore.MySql
+dotnet add package Microsoft.AspNetCore.Authentication.JwtBearer
+dotnet add package System.IdentityModel.Tokens.Jwt
+2. appsettings.json
+jsonc
+Copiar código
+{
+  "ConnectionStrings": {
+    "Default": "server=localhost;port=3306;database=eventosdb;user=root;password=senha"
+  },
+  "Jwt": {
+    "Key": "uma-chave-muito-secreta-super-longa",
+    "Issuer": "EventosApi",
+    "Audience": "EventosApiUsers",
+    "DurationMinutes": 60
+  },
+  "Logging": {
+    "LogLevel": { "Default": "Information", "Microsoft": "Warning" }
+  },
+  "AllowedHosts": "*"
+}
+Obs.: ajuste server, user e password conforme seu MySQL local.
+
+3. Models e DbContext
+3.1 Models/Usuario.cs
+csharp
+Copiar código
+using System;
+using System.Collections.Generic;
+
+namespace EventosApi.Models
+{
+    public class Usuario
+    {
+        public int Id { get; set; }
+        public string Email { get; set; } = null!;
+        public string Senha { get; set; } = null!;
+        public DateTime CriadoEm { get; set; } = DateTime.UtcNow;
+
+        public ICollection<Evento> Eventos { get; set; } = new List<Evento>();
+    }
+}
+3.2 Models/Evento.cs
+csharp
+Copiar código
+using System;
+
+namespace EventosApi.Models
+{
+    public class Evento
+    {
+        public int Id { get; set; }
+        public string Nome { get; set; } = null!;
+        public string Local { get; set; } = null!;
+        public DateTime Data { get; set; }
+        public DateTime CriadoEm { get; set; } = DateTime.UtcNow;
+
+        public int UsuarioId { get; set; }
+        public Usuario Usuario { get; set; } = null!;
+    }
+}
+3.3 Data/ApplicationDbContext.cs
+csharp
+Copiar código
+using Microsoft.EntityFrameworkCore;
+using EventosApi.Models;
+
+namespace EventosApi.Data
+{
+    public class ApplicationDbContext : DbContext
+    {
+        public ApplicationDbContext(DbContextOptions<ApplicationDbContext> opts)
+            : base(opts) { }
+
+        public DbSet<Usuario> Usuarios { get; set; } = null!;
+        public DbSet<Evento> Eventos { get; set; } = null!;
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            modelBuilder.Entity<Usuario>()
+                .HasIndex(u => u.Email)
+                .IsUnique();
+
+            modelBuilder.Entity<Usuario>()
+                .Property(u => u.Email)
+                .IsRequired();
+
+            modelBuilder.Entity<Usuario>()
+                .Property(u => u.Senha)
+                .IsRequired();
+
+            modelBuilder.Entity<Evento>()
+                .Property(e => e.Nome)
+                .IsRequired();
+
+            modelBuilder.Entity<Evento>()
+                .Property(e => e.Local)
+                .IsRequired();
+
+            modelBuilder.Entity<Evento>()
+                .HasOne(e => e.Usuario)
+                .WithMany(u => u.Eventos)
+                .HasForeignKey(e => e.UsuarioId);
+        }
+    }
+}
+4. Configurar JWT e EF no Program.cs
+csharp
+Copiar código
+using System.Text;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+using EventosApi.Data;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// 1) DbContext
+builder.Services.AddDbContext<ApplicationDbContext>(opt =>
+    opt.UseMySql(
+        builder.Configuration.GetConnectionString("Default"),
+        ServerVersion.AutoDetect(builder.Configuration.GetConnectionString("Default"))
+    )
+);
+
+// 2) JWT
+var jwt = builder.Configuration.GetSection("Jwt");
+var key = Encoding.ASCII.GetBytes(jwt["Key"]!);
+
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme    = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer           = true,
+        ValidateAudience         = true,
+        ValidateIssuerSigningKey = true,
+        ValidIssuer              = jwt["Issuer"],
+        ValidAudience            = jwt["Audience"],
+        IssuerSigningKey         = new SymmetricSecurityKey(key),
+        ClockSkew                = TimeSpan.Zero
+    };
+});
+
+builder.Services.AddAuthorization();
+builder.Services.AddControllers();
+
+var app = builder.Build();
+
+app.UseRouting();
+app.UseAuthentication();
+app.UseAuthorization();
+app.MapControllers();
+
+app.Run();
+5. Helpers de Token e Hash de Senha
+5.1 Helpers/ITokenService.cs
+csharp
+Copiar código
+using EventosApi.Models;
+
+namespace EventosApi.Helpers
+{
+    public interface ITokenService
+    {
+        string GerarToken(Usuario usuario);
+    }
+}
+5.2 Helpers/TokenService.cs
+csharp
+Copiar código
+using System;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
+using Microsoft.Extensions.Configuration;
+using Microsoft.IdentityModel.Tokens;
+using EventosApi.Models;
+
+namespace EventosApi.Helpers
+{
+    public class TokenService : ITokenService
+    {
+        private readonly IConfiguration _config;
+        public TokenService(IConfiguration config) => _config = config;
+
+        public string GerarToken(Usuario usuario)
+        {
+            var jwt  = _config.GetSection("Jwt");
+            var key  = new SymmetricSecurityKey(Encoding.ASCII.GetBytes(jwt["Key"]!));
+            var creds= new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+            var claims = new[]
+            {
+                new Claim(JwtRegisteredClaimNames.Sub, usuario.Id.ToString()),
+                new Claim(JwtRegisteredClaimNames.Email, usuario.Email),
+            };
+
+            var token = new JwtSecurityToken(
+                issuer: jwt["Issuer"],
+                audience: jwt["Audience"],
+                claims: claims,
+                expires: DateTime.UtcNow.AddMinutes(double.Parse(jwt["DurationMinutes"]!)),
+                signingCredentials: creds
+            );
+
+            return new JwtSecurityTokenHandler().WriteToken(token);
+        }
+    }
+}
+E registre no Program.cs, logo após AddControllers():
+
+csharp
+Copiar código
+builder.Services.AddScoped<ITokenService, TokenService>();
+6. Controllers
+6.1 Controllers/UsuariosController.cs
+csharp
+Copiar código
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using EventosApi.Data;
+using EventosApi.Models;
+using EventosApi.Helpers;
+using System.Security.Cryptography;
+using System.Text;
+
+namespace EventosApi.Controllers
+{
+    [ApiController]
+    [Route("usuarios")]
+    public class UsuariosController : ControllerBase
+    {
+        private readonly ApplicationDbContext _ctx;
+        private readonly ITokenService _tokenService;
+        public UsuariosController(ApplicationDbContext ctx, ITokenService tokenService)
+        {
+            _ctx = ctx;
+            _tokenService = tokenService;
+        }
+
+        [HttpPost("cadastrar")]
+        public async Task<IActionResult> Cadastrar([FromBody] Usuario dto)
+        {
+            if (await _ctx.Usuarios.AnyAsync(u => u.Email == dto.Email))
+                return BadRequest("Email já cadastrado.");
+
+            // hash simples (substituir por algo mais robusto em prod)
+            dto.Senha = Convert.ToBase64String(
+                SHA256.Create().ComputeHash(Encoding.UTF8.GetBytes(dto.Senha))
+            );
+
+            _ctx.Usuarios.Add(dto);
+            await _ctx.SaveChangesAsync();
+            return CreatedAtAction(null, new { id = dto.Id }, dto);
+        }
+
+        [HttpPost("login")]
+        public async Task<IActionResult> Login([FromBody] Usuario dto)
+        {
+            var hash = Convert.ToBase64String(
+                SHA256.Create().ComputeHash(Encoding.UTF8.GetBytes(dto.Senha))
+            );
+
+            var user = await _ctx.Usuarios
+                .FirstOrDefaultAsync(u => u.Email == dto.Email && u.Senha == hash);
+
+            if (user == null) return Unauthorized("Credenciais inválidas.");
+
+            var token = _tokenService.GerarToken(user);
+            return Ok(new { token });
+        }
+
+        [HttpGet("listar")]
+        [Microsoft.AspNetCore.Authorization.Authorize]
+        public async Task<IActionResult> Listar()
+        {
+            var users = await _ctx.Usuarios
+                                  .Select(u => new { u.Id, u.Email, u.CriadoEm })
+                                  .ToListAsync();
+            return Ok(users);
+        }
+    }
+}
+6.2 Controllers/EventosController.cs
+csharp
+Copiar código
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using EventosApi.Data;
+using EventosApi.Models;
+using System.Security.Claims;
+
+namespace EventosApi.Controllers
+{
+    [ApiController]
+    [Route("eventos")]
+    [Microsoft.AspNetCore.Authorization.Authorize]
+    public class EventosController : ControllerBase
+    {
+        private readonly ApplicationDbContext _ctx;
+        public EventosController(ApplicationDbContext ctx) => _ctx = ctx;
+
+        private int UsuarioId =>
+            int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)
+                ?? User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
+
+        [HttpPost("criar")]
+        public async Task<IActionResult> Criar([FromBody] Evento dto)
+        {
+            dto.UsuarioId = UsuarioId;
+            _ctx.Eventos.Add(dto);
+            await _ctx.SaveChangesAsync();
+            return CreatedAtAction(null, new { id = dto.Id }, dto);
+        }
+
+        [HttpGet("listar")]
+        public async Task<IActionResult> Listar()
+        {
+            var evs = await _ctx.Eventos
+                .Where(e => e.UsuarioId == UsuarioId)
+                .ToListAsync();
+            return Ok(evs);
+        }
+
+        [HttpPut("atualizar/{id}")]
+        public async Task<IActionResult> Atualizar(int id, [FromBody] Evento dto)
+        {
+            var eve = await _ctx.Eventos.FindAsync(id);
+            if (eve == null || eve.UsuarioId != UsuarioId) return NotFound();
+
+            eve.Nome = dto.Nome;
+            eve.Local = dto.Local;
+            eve.Data  = dto.Data;
+            await _ctx.SaveChangesAsync();
+            return NoContent();
+        }
+
+        [HttpDelete("remover/{id}")]
+        public async Task<IActionResult> Remover(int id)
+        {
+            var eve = await _ctx.Eventos.FindAsync(id);
+            if (eve == null || eve.UsuarioId != UsuarioId) return NotFound();
+
+            _ctx.Eventos.Remove(eve);
+            await _ctx.SaveChangesAsync();
+            return NoContent();
+        }
+    }
+}
+7. Migrations e criação do banco
+No terminal:
+
+bash
+Copiar código
+dotnet tool install --global dotnet-ef
+dotnet ef migrations add InitialCreate
+dotnet ef database update
+Isso vai gerar o esquema no seu MySQL.
+
+Testando com o Postman ou Insomnia
+Cadastrar:
+POST /usuarios/cadastrar
+Body JSON:
+
+json
+Copiar código
+{ "email": "user@ex.com", "senha": "123456" }
+Login:
+POST /usuarios/login → retorna { "token": "..." }
+
+Listar usuários (protected):
+Header Authorization: Bearer {token} → GET /usuarios/listar
+
+Criar evento:
+Header Authorization → POST /eventos/criar
+Body JSON:
+
+json
+Copiar código
+{ "nome": "Aniversário", "local": "Salão X", "data": "2025-06-01T20:00:00Z" }
+Listar eventos, Atualizar, Remover de forma semelhante em /eventos/listar, /eventos/atualizar/{id}, /eventos/remover/{id}.
+
+Pronto! Com isso você tem uma API completa, com autenticação JWT, CRUD de usuários e eventos, e proteção de rotas. Qualquer dúvida ou ajuste, só falar!
