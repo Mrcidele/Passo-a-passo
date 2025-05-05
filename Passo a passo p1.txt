@@ -1,0 +1,257 @@
+1️⃣ Criando o Projeto
+Criação do projeto ASP.NET Core Web API e da solução:
+dotnet new webapi -n Estudo --no-https --use-controllers
+dotnet new sln -n Solution
+dotnet sln Solution.sln add Estudo/Estudo.csproj
+
+Removendo arquivos desnecessários:
+del Controllers/WeatherForecastController.cs
+del WeatherForecast.cs
+
+2️⃣ Instalando Dependências
+Instalar pacotes essenciais para Entity Framework Core, MySQL e JWT:
+dotnet add package Microsoft.EntityFrameworkCore.Design
+dotnet add package Microsoft.EntityFrameworkCore
+dotnet add package Pomelo.EntityFrameworkCore.MySql
+dotnet add package Microsoft.AspNetCore.Authentication.JwtBearer
+dotnet add package Swashbuckle.AspNetCore
+
+Instalar a ferramenta dotnet-ef para gerenciamento do banco:
+dotnet tool install --global dotnet-ef
+
+Se estiver usando EF Core 8, remova versões antigas e instale:
+dotnet remove package Pomelo.EntityFrameworkCore.MySql
+dotnet remove package Microsoft.EntityFrameworkCore.Tools
+dotnet remove package Microsoft.EntityFrameworkCore.Design
+
+dotnet add package Microsoft.EntityFrameworkCore --version 8.0.0
+dotnet add package Microsoft.EntityFrameworkCore.Tools --version 8.0.0
+dotnet add package Microsoft.EntityFrameworkCore.Design --version 8.0.0
+dotnet add package Pomelo.EntityFrameworkCore.MySql --version 8.0.0
+
+dotnet clean
+dotnet restore
+dotnet build
+
+3️⃣ Configuração do Banco de Dados
+Adicionando conexão com MySQL no Program.cs:
+builder.Services.AddDbContext<AppDataContext>(options =>
+    options.UseMySql(
+      builder.Configuration.GetConnectionString("MySQL"),
+      ServerVersion.AutoDetect(builder.Configuration.GetConnectionString("MySQL"))
+    ));
+
+Definição da string de conexão em appsettings.json:
+"ConnectionStrings": {
+  "MySQL": "server=localhost;database=nome_do_banco;user=root;password=sua_senha"
+}
+
+Criando e aplicando a migration inicial:
+dotnet ef migrations add InitialCreate
+dotnet ef database update
+
+4️⃣ Criando Models
+Criando Models/Produto.cs:
+public class Produto
+{
+    public int Id { get; set; }
+    public string Nome { get; set; } = string.Empty;
+    public DateTime CriadoEm { get; set; } = DateTime.Now;
+    public int UsuarioId { get; set; }
+    public Usuario? Usuario { get; set; }
+}
+
+Criando Models/Usuario.cs:
+public class Usuario
+{
+    public int Id { get; set; }
+    public string Email { get; set; } = string.Empty;
+    public string Senha { get; set; } = string.Empty;
+    public Role Role { get; set; } = Role.user;
+    public List<Produto> Produtos { get; set; } = new();
+}
+
+public enum Role
+{
+    user,
+    admin
+}
+
+5️⃣ Criando DataContext
+Arquivo Data/AppDataContext.cs:
+public class AppDataContext : DbContext
+{
+    public AppDataContext(DbContextOptions options) : base(options) {}
+
+    public DbSet<Produto> Produtos { get; set; }
+    public DbSet<Usuario> Usuarios { get; set; }
+}
+
+6️⃣ Criando Repositórios
+Implementação do Repository Pattern:
+
+Interface IProdutoRepository (Repositories/IProdutoRepository.cs)
+public interface IProdutoRepository
+{
+    void Cadastrar(Produto produto);
+    List<Produto> Listar();
+}
+
+Implementação (Repositories/ProdutoRepository.cs)
+public class ProdutoRepository : IProdutoRepository
+{
+    private readonly AppDataContext _context;
+    public ProdutoRepository(AppDataContext context) { _context = context; }
+
+    public void Cadastrar(Produto produto) { _context.Produtos.Add(produto); _context.SaveChanges(); }
+    public List<Produto> Listar() { return _context.Produtos.ToList(); }
+}
+
+Registrando o repositório no Program.cs:
+builder.Services.AddScoped<IProdutoRepository, ProdutoRepository>();
+
+7️⃣ Criando Controllers
+ProdutoController
+[HttpPost("cadastrar")]
+[Authorize(Roles = "admin")]
+public IActionResult Cadastrar([FromBody] Produto produto)
+{
+    _produtoRepository.Cadastrar(produto);
+    return Created("", produto);
+}
+
+[HttpGet("listar")]
+[Authorize]
+public IActionResult Listar()
+{
+    return Ok(_produtoRepository.Listar());
+}
+
+AuthController (Login com JWT)
+[HttpPost("login")]
+public IActionResult Login([FromBody] Usuario usuario)
+{
+    var usuarioExistente = _usuarioRepository.BuscarUsuarioPorEmailSenha(usuario.Email, usuario.Senha);
+    if (usuarioExistente == null) return Unauthorized(new { mensagem = "Usuário ou senha inválidos!" });
+
+    var token = GerarToken(usuarioExistente);
+    return Ok(token);
+}
+
+private string GerarToken(Usuario usuario)
+{
+    var claims = new[]
+    {
+        new Claim(ClaimTypes.Name, usuario.Email),
+        new Claim(ClaimTypes.Role, usuario.Role.ToString())
+    };
+
+    var chave = Encoding.UTF8.GetBytes(_configuration["JwtSettings:SecretKey"]!);
+    var credenciais = new SigningCredentials(
+        new SymmetricSecurityKey(chave), SecurityAlgorithms.HmacSha256);
+
+    var token = new JwtSecurityToken(
+        claims: claims,
+        expires: DateTime.UtcNow.AddHours(1),
+        signingCredentials: credenciais);
+
+    return new JwtSecurityTokenHandler().WriteToken(token);
+}
+
+8️⃣ Configuração do JWT
+Definição da chave secreta em appsettings.json:
+"JwtSettings": {
+  "SecretKey": "sua-chave-super-secreta-aqui"
+}
+
+Gerar uma chave segura no PowerShell:
+[Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Minimum 0 -Maximum 256 }))
+
+Configuração no Program.cs:var chaveJwt = builder.Configuration["JwtSettings:SecretKey"];
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = false,
+            ValidateAudience = false,
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.Zero,
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(chaveJwt!))
+        };
+    });
+
+builder.Services.AddAuthorization();
+
+9️⃣ Criando e Aplicando Migrations
+Criar e aplicar a migração inicial:
+dotnet ef migrations add InitialCreate
+dotnet ef database update
+
+🔟 Testando API no Postman
+📥 Cadastrar usuário (POST)
+POST /api/auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@empresa.com",
+  "senha": "123456"
+}
+
+🔐 Usar token no cabeçalho:
+Authorization: Bearer {token}
+
+
+2️⃣ Criando o Frontend com React e TypeScript
+Configuração Inicial
+Criar projeto
+
+npx create-react-app meu-frontend --template typescript
+cd meu-frontend
+
+Criando Componentes
+src/App.tsx
+
+import React, { useEffect, useState } from "react";
+
+function App() {
+  const [produtos, setProdutos] = useState([]);
+
+  useEffect(() => {
+    fetch("http://localhost:5000/api/produto/listar")
+      .then(res => res.json())
+      .then(data => setProdutos(data));
+  }, []);
+
+  return (
+    <div>
+      <h1>Lista de Produtos</h1>
+      <ul>
+        {produtos.map((produto) => (
+          <li key={produto.id}>{produto.nome} - R$ {produto.preco}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+export default App;
+
+Executando o Frontend:
+npm start
+
+3️⃣ Conectando Frontend e Backend
+Corrigir problemas de CORS
+No backend, adicione CORS em Program.cs:
+
+builder.Services.AddCors(options =>
+    options.AddPolicy("PermitirTudo", policy =>
+        policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
+
+var app = builder.Build();
+app.UseCors("PermitirTudo");
+
+No entanto, alguns ajustes podem ser necessários dependendo do seu ambiente: ✅ O backend precisa estar rodando (dotnet run) para que o React consiga consumir a API. ✅ CORS configurado no backend (Program.cs) para evitar bloqueios. ✅ O frontend deve apontar corretamente para a API (http://localhost:5000/api/produto/listar).
+
+

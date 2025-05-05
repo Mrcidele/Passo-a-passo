@@ -1,0 +1,498 @@
+gerar chave secreta
+[Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Minimum 0 -Maximum 256 }))
+
+1. Criar API e adicionar SLN
+
+===========================================================================================
+
+dotnet new webapi -n Estudo --no-https --use-controllers
+
+dotnet new sln -n Solution
+
+dotnet sln Solution.sln add Estudo/Estudo.csproj
+
+===========================================================================================
+
+2. Apagar 
+
+del Controllers/WeatherForecastController.cs
+del WeatherForecast.cs
+
+===========================================================================================
+
+3. Pacotes
+
+dotnet add package Microsoft.EntityFrameworkCore.Design
+dotnet add package Microsoft.EntityFrameworkCore
+dotnet add package Pomelo.EntityFrameworkCore.MySql
+dotnet add package Microsoft.AspNetCore.Authentication.JwtBearer
+dotnet add package Swashbuckle.AspNetCore
+
+
+dotnet tool install --global dotnet-ef
+
+
+# 1) Remover qualquer Pomelo antigo
+dotnet remove package Pomelo.EntityFrameworkCore.MySql
+
+# 2) Instalar a versão preview compatível com EF Core 9
+dotnet add package Pomelo.EntityFrameworkCore.MySql --version 9.0.0-preview.3.efcore.9.0.0
+
+# 3) Garantir as ferramentas EF Core na mesma versão do runtime
+dotnet add package Microsoft.EntityFrameworkCore.Tools --version 9.0.4
+dotnet add package Microsoft.EntityFrameworkCore.Design --version 9.0.4
+
+# 4) Limpar e restaurar pacotes
+dotnet clean
+dotnet restore
+
+# 5) Build para validar tudo
+dotnet build
+
+# 6) Finalmente, criar e aplicar a migration
+dotnet ef migrations add InitialCreate
+dotnet ef database update
+
+using Pomelo.EntityFrameworkCore.MySql.Infrastructure;
+
+builder.Services.AddDbContext<AppDataContext>(options =>
+    options.UseMySql(
+      builder.Configuration.GetConnectionString("MySQL"),
+      ServerVersion.AutoDetect(builder.Configuration.GetConnectionString("MySQL"))
+    ));
+
+DROP DATABASE nome_do_banco_de_dados;
+
+
+
+SE FOR A 8.0
+
+Remova versões atuais (se necessário):
+
+
+dotnet remove package Pomelo.EntityFrameworkCore.MySql
+dotnet remove package Microsoft.EntityFrameworkCore.Tools
+dotnet remove package Microsoft.EntityFrameworkCore.Design
+Adicione as versões compatíveis com EF Core 8:
+
+
+dotnet add package Microsoft.EntityFrameworkCore --version 8.0.0
+dotnet add package Microsoft.EntityFrameworkCore.Tools --version 8.0.0
+dotnet add package Microsoft.EntityFrameworkCore.Design --version 8.0.0
+dotnet add package Pomelo.EntityFrameworkCore.MySql --version 8.0.0
+Limpe, restaure e valide:
+
+
+dotnet clean
+dotnet restore
+dotnet build
+Depois, crie as migrations normalmente:
+
+
+dotnet ef migrations add InitialCreate
+dotnet ef database update
+	
+
+===========================================================================================
+
+4. Classes (Pasta e classes)
+
+===========================================================================================
+
+namespace API.Models;
+
+public class Produto
+{
+    public int Id { get; set; }
+    public string Nome { get; set; } = string.Empty;
+    public DateTime CriadoEm { get; set; } = DateTime.Now;
+}
+
+namespace API.Models;
+
+public class Usuario
+{
+    public int Id { get; set; }
+    public string Email { get; set; } = string.Empty;
+    public string Senha { get; set; } = string.Empty;
+    public Permissao Permissao { get; set; } = Permissao.administrador;
+    public DateTime CriadoEm { get; set; } = DateTime.Now;
+}
+
+namespace API.Models;
+public enum Permissao
+{
+    usuario,
+    administrador
+}
+
+pra fazer relacionamento
+
+===========================================================================================
+
+public class Produto
+{
+    public int Id { get; set; }
+    public string Nome { get; set; } = string.Empty;
+    public DateTime CriadoEm { get; set; } = DateTime.Now;
+
+    // RELACIONAMENTO:
+    public int UsuarioId { get; set; }                  // Chave estrangeira
+    public Usuario? Usuario { get; set; }               // Navegação
+}
+
+public class Usuario
+{
+    public int Id { get; set; }
+    public string Email { get; set; } = string.Empty;
+    public string Senha { get; set; } = string.Empty;
+    public Permissao Permissao { get; set; } = Permissao.administrador;
+    public DateTime CriadoEm { get; set; } = DateTime.Now;
+
+    // RELACIONAMENTO:
+    public List<Produto> Produtos { get; set; } = new();
+}
+
+===========================================================================================
+
+5. DataContext + Pasta data
+
+using Microsoft.EntityFrameworkCore;
+using API.Models;
+
+namespace API.Data;
+
+public class AppDataContext : DbContext
+{
+    public AppDataContext(DbContextOptions options) : base(options) {}
+
+    public DbSet<Produto> Produtos { get; set; }
+    public DbSet<Usuario> Usuarios { get; set; }
+}
+
+============================================================================================
+
+6. Criação dos repositórios dentro da pasta Data
+
+Data/IProdutoRepository.cs
+
+using API.Models;
+
+namespace API.Data;
+
+public interface IProdutoRepository
+{
+    void Cadastrar(Produto produto);
+    List<Produto> Listar();
+}
+
+Data/IUsuarioRepository.cs
+
+using API.Models;
+
+namespace API.Data;
+
+public interface IUsuarioRepository
+{
+    void Cadastrar(Usuario usuario);
+    List<Usuario> Listar();
+    Usuario? BuscarUsuarioPorEmailSenha(string email, string senha);
+}
+
+
+Data/ProdutoRepository.cs
+
+
+using API.Models;
+
+namespace API.Data;
+
+public class ProdutoRepository : IProdutoRepository
+{
+    private readonly AppDataContext _context;
+    public ProdutoRepository(AppDataContext context)
+    {
+        _context = context;
+    }
+
+    public void Cadastrar(Produto produto)
+    {
+        _context.Produtos.Add(produto);
+        _context.SaveChanges();
+    }
+
+    public List<Produto> Listar()
+    {
+        return _context.Produtos.ToList();
+    }
+}
+
+
+Data/UsuarioRepository.cs
+
+using API.Models;
+
+namespace API.Data;
+
+public class UsuarioRepository : IUsuarioRepository
+{
+    private readonly AppDataContext _context;
+    public UsuarioRepository(AppDataContext context)
+    {
+        _context = context;
+    }
+
+    public void Cadastrar(Usuario usuario)
+    {
+        _context.Usuarios.Add(usuario);
+        _context.SaveChanges();
+    }
+
+    public List<Usuario> Listar()
+    {
+        return _context.Usuarios.ToList();
+    }
+
+    public Usuario? BuscarUsuarioPorEmailSenha(string email, string senha)
+    {
+        return _context.Usuarios.FirstOrDefault(u => u.Email == email && u.Senha == senha);
+    }
+}
+
+
+====================================================================================
+
+7. Jwt no appsettings.json // abrir o xamp // ajustar a porta
+
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*",
+  "ConnectionStrings": {
+    "MySQL": "server=localhost;port=3307;database=Ecommerce;user=root;password="
+  },
+  "JwtSettings": {
+    "SecretKey": "khqmgUz1U1oE60MBIMvTpWUl2wyyVXOnpx23XM9See8="
+  }
+}
+
+=====================================================================================
+
+8. Controllers/ProdutoController.cs
+
+
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using API.Data;
+using API.Models;
+
+namespace API.Controllers;
+
+[ApiController]
+[Route("api/produto")]
+public class ProdutoController : ControllerBase
+{
+    private readonly IProdutoRepository _produtoRepository;
+    public ProdutoController(IProdutoRepository produtoRepository)
+    {
+        _produtoRepository = produtoRepository;
+    }
+
+    [HttpPost("cadastrar")]
+    [Authorize(Roles = "administrador")]
+    public IActionResult Cadastrar([FromBody] Produto produto)
+    {
+        _produtoRepository.Cadastrar(produto);
+        return Created("", produto);
+    }
+
+    [HttpGet("listar")]
+    [Authorize]
+    public IActionResult Listar()
+    {
+        return Ok(_produtoRepository.Listar());
+    }
+}
+
+======================================================================
+
+9. Controllers/UsuarioController.cs
+
+using Microsoft.AspNetCore.Mvc;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
+using Microsoft.IdentityModel.Tokens;
+using API.Data;
+using API.Models;
+
+namespace API.Controllers;
+
+[ApiController]
+[Route("api/usuario")]
+public class UsuarioController : ControllerBase
+{
+    private readonly IUsuarioRepository _usuarioRepository;
+    private readonly IConfiguration _configuration;
+
+    public UsuarioController(IUsuarioRepository usuarioRepository, IConfiguration configuration)
+    {
+        _usuarioRepository = usuarioRepository;
+        _configuration = configuration;
+    }
+
+    [HttpPost("cadastrar")]
+    public IActionResult Cadastrar([FromBody] Usuario usuario)
+    {
+        _usuarioRepository.Cadastrar(usuario);
+        return Created("", usuario);
+    }
+
+    [HttpPost("login")]
+    public IActionResult Login([FromBody] Usuario usuario)
+    {
+        var usuarioExistente = _usuarioRepository.BuscarUsuarioPorEmailSenha(usuario.Email, usuario.Senha);
+        if (usuarioExistente == null)
+            return Unauthorized(new { mensagem = "Usuário ou senha inválidos!" });
+
+        var token = GerarToken(usuarioExistente);
+        return Ok(token);
+    }
+
+    [HttpGet("listar")]
+    public IActionResult Listar()
+    {
+        return Ok(_usuarioRepository.Listar());
+    }
+
+    [ApiExplorerSettings(IgnoreApi = true)]
+    public string GerarToken(Usuario usuario)
+    {
+        var claims = new[]
+        {
+            new Claim(ClaimTypes.Name, usuario.Email),
+            new Claim(ClaimTypes.Role, usuario.Permissao.ToString())
+        };
+
+        var chave = Encoding.UTF8.GetBytes(_configuration["JwtSettings:SecretKey"]!);
+        var assinatura = new SigningCredentials(new SymmetricSecurityKey(chave), SecurityAlgorithms.HmacSha256);
+
+        var token = new JwtSecurityToken(
+            claims: claims,
+            expires: DateTime.Now.AddMinutes(30),
+            signingCredentials: assinatura
+        );
+
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+}
+
+
+====================================================================================================================
+
+10. Program.cs
+
+using System.Text;
+using API.Data;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+var connectionString = builder.Configuration.GetConnectionString("MySQL");
+
+builder.Services.AddDbContext<AppDataContext>(options =>
+    options.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString)));
+
+builder.Services.AddScoped<IProdutoRepository, ProdutoRepository>();
+builder.Services.AddScoped<IUsuarioRepository, UsuarioRepository>();
+
+var chaveJwt = builder.Configuration["JwtSettings:SecretKey"];
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = false,
+            ValidateAudience = false,
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.Zero,
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(chaveJwt!))
+        };
+    });
+
+builder.Services.AddAuthorization();
+
+var app = builder.Build();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseAuthentication();
+app.UseAuthorization();
+app.MapControllers();
+app.Run();
+
+==============================================================================================
+
+Tests
+
+usuario.http
+
+@url_base = http://localhost:5268/api/usuario
+
+### Cadastrar usuário
+POST {{url_base}}/cadastrar
+Content-Type: application/json
+
+{
+    "email" : "adm",
+    "senha" : "123"
+}
+
+### Login
+POST {{url_base}}/login
+Content-Type: application/json
+
+{
+    "email" : "adm",
+    "senha" : "123"
+}
+
+### Listar usuários
+GET {{url_base}}/listar
+
+produto.http
+
+@url_base = http://localhost:5268/api/produto
+
+### Cadastrar produto
+POST {{url_base}}/cadastrar
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJodHRwOi8vc2NoZW1hcy54bWxzb2FwLm9yZy93cy8yMDA1LzA1L2lkZW50aXR5L2NsYWltcy9uYW1lIjoiVGVzdGUiLCJodHRwOi8vc2NoZW1hcy5taWNyb3NvZnQuY29tL3dzLzIwMDgvMDYvaWRlbnRpdHkvY2xhaW1zL3JvbGUiOiJ1c3VhcmlvIiwiZXhwIjoxNzQ1ODgxODAzfQ.QA2jL4YVPPhmR9_LeXitQVN1zIu1iQLEHcRyuZFQYcA
+Content-Type: application/json
+
+{
+    "nome" : "Bolacha"
+}
+
+### Listar produtos
+GET {{url_base}}/listar
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJodHRwOi8vc2NoZW1hcy54bWxzb2FwLm9yZy93cy8yMDA1LzA1L2lkZW50aXR5L2NsYWltcy9uYW1lIjoiVGVzdGUiLCJodHRwOi8vc2NoZW1hcy5taWNyb3NvZnQuY29tL3dzLzIwMDgvMDYvaWRlbnRpdHkvY2xhaW1zL3JvbGUiOiJ1c3VhcmlvIiwiZXhwIjoxNzQ1ODc0OTg3fQ.UuVpH9dt-qNvew3JzEByg6XmAYdnOibROf8SWaJzGVk
+
+11. Migrations
+
+dotnet ef migrations add InitialCreate
+dotnet ef database update
